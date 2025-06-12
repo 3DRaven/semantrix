@@ -158,6 +158,8 @@ Semantrix supports numerous pre-trained embedding models:
 
 ### LLM integration
 
+The launch script must be modified to match the location of your MCP server.
+
 ```json
 {
   "mcpServers": {
