@@ -199,9 +199,6 @@ cargo run --release
     - URI: `file:///home/i3draven/fun/Rust/semantrix/src/enums.rs`
     - Range: lines 35-35, columns 5-13
 - **Code:**
-```
-    File = 1,
-```
 ## Fuzzy Rules
 - Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
 ## Fuzzy Symbols
@@ -214,9 +211,7 @@ cargo run --release
     - Range: lines 87-87, columns 12-30
 
 - **Code:**
-```
 pub struct LspServerSubsystem {
-```
 ```
 
 ### MCP Integration
