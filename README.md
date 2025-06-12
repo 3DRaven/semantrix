@@ -37,10 +37,10 @@ The system continuously monitors your codebase, maintains semantic embeddings of
 - Reduces code duplication and promotes reuse
 - Helps discover existing patterns and implementations
 
-### **Additional rules and templates**
+### ⚙️ **Additional rules and templates**
 - User can add additional rules from rules.yaml file to search result.
 - Both the server description and the generated prompt can be customized using templates included in the project.
-- Custom templates support dynamic insertion of variables and flexible formatting, making it possible to tailor
+- Custom templates (jinja2 sintax) support dynamic insertion of variables and flexible formatting, making it possible to tailor
   responses and instructions to your specific workflow and requirements.
 
 ## Architecture
