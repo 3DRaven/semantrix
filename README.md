@@ -160,6 +160,375 @@ Semantrix supports numerous pre-trained embedding models:
 cargo run --release
 ```
 
+### Call example
+
+#### Request
+
+```json
+{
+  "name_patterns": [
+    "HttpHandler",
+    "ServerSubsystem",
+    "McpServer"
+  ],
+  "semantic_queries": [
+    "MCP server implementation",
+    "subsystem architecture",
+    "tokio async runtime setup"
+  ]
+}
+```
+
+#### Response
+
+```markdown
+
+
+## Semantic Rules
+
+
+
+- Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
+
+- Never create a `new` method; instead, implement the `From` trait if it possible.
+
+- Prefer using `inspect_err`, the `error!` macro, and error propagation instead of `map_err`
+
+- Re-exporting is strictly prohibited in the project
+
+- The following symbols were found: [
+
+    SymbolInfo, 
+
+    DocumentSymbols, 
+
+    ChunkerSubsystem, 
+
+    PathEvent
+
+].
+For all such structures, you must implement `#[derive(Debug)]`.
+
+
+- Try to write code in a way that is easy to understand and maintain
+
+
+
+## Semantic Symbols
+
+
+
+---
+
+**Name:** `File`
+- **Kind:** `EnumMember`
+- **Container:** McpSymbolKind
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/enums.rs`
+    - Range: lines 35-35, columns 5-13
+
+- **Code:**
+```
+    File = 1,
+```
+
+
+
+---
+
+**Name:** `subsystems`
+- **Kind:** `Module`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/lib.rs`
+    - Range: lines 4-4, columns 1-20
+
+- **Code:**
+```
+pub mod subsystems;
+```
+
+
+
+---
+
+**Name:** `VERSION`
+- **Kind:** `Constant`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/lib.rs`
+    - Range: lines 48-48, columns 1-53
+
+- **Code:**
+```
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+```
+
+
+
+---
+
+**Name:** `load_config`
+- **Kind:** `Function`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/lib.rs`
+    - Range: lines 157-192, columns 1-2
+
+- **Code:**
+```
+pub fn load_config(path: &str) -> Result<McpConfig> {
+    info!("Loading configuration from file: {}", path);
+
+    let config = Config::builder()
+        .add_source(
+            Environment::default()
+                .prefix(&NAME.to_uppercase())
+                .separator("_")
+                .ignore_empty(true),
+        )
+        .add_source(File::new(path, FileFormat::Yaml))
+        .build()
+        .into_diagnostic()?;
+
+    let app_config: McpConfig = config
+        .try_deserialize()
+        .inspect_err(|e| error!("Failed to deserialize configuration: {}", e))
+        .into_diagnostic()?;
+
+    if app_config.search.semantic.chunk_size < 1 {
+        return Err(miette::miette!(
+            "chunk_size must be greater than 0, but got {}",
+            app_config.search.semantic.chunk_size
+        ));
+    }
+
+    if app_config.search.semantic.overlap_size > app_config.search.semantic.chunk_size - 1 {
+        return Err(miette::miette!(
+            "overlap_size must be less or equal to chunk_size - 1, but got {} > {}",
+            app_config.search.semantic.overlap_size,
+            app_config.search.semantic.chunk_size
+        ));
+    }
+
+    Ok(app_config)
+}
+```
+
+
+
+---
+
+**Name:** `init_db`
+- **Kind:** `Function`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/lib.rs`
+    - Range: lines 466-562, columns 1-2
+
+- **Code:**
+```
+pub async fn init_db() -> Result<(
+    usize,
+    Table,
+    rig_fastembed::EmbeddingModel,
+    Arc<LanceDbVectorIndex<rig_fastembed::EmbeddingModel>>,
+)> {
+    let db: Connection = lancedb::connect(&CONFIG.search.semantic.lancedb_store)
+        .execute()
+        .await
+        .into_diagnostic()?;
+
+    let model = model_from_str(&CONFIG.search.semantic.model);
+    let model_info = TextEmbedding::get_model_info(&model).map_err(|e| {
+        miette::miette!(
+            "Failed to get model info for model: {:?}, error: {}",
+            model,
+            e
+        )
+    })?;
+    info!("Model info: {:?}", model_info);
+    let (model_path, tokenizer_files) = get_or_download_model(model.clone(), model_info).await?;
+    info!("Reading model.onnx file from {:?}", model_path);
+    let onnx_file = read_file_to_bytes(&model_path).expect("Could not read model.onnx file");
+    info!("Creating embedding model");
+    let user_defined_model =
+        UserDefinedEmbeddingModel::new(onnx_file, tokenizer_files).with_pooling(Pooling::Mean);
+
+    let ndims = model_info.dim;
+
+    let embedding_model =
+        rig_fastembed::EmbeddingModel::new_from_user_defined(user_defined_model, ndims, model_info);
+
+    let table: Table = get_or_create_table(&db, ndims).await?;
+
+    if table
+        .index_stats(DEFAULT_CHUNKS_PATH_FIELD)
+        .await
+        .into_diagnostic()?
+        .is_none()
+    {
+        table
+            .create_index(&[DEFAULT_CHUNKS_PATH_FIELD], lancedb::index::Index::Auto)
+            .execute()
+            .await
+            .into_diagnostic()?;
+    }
+
+    if CONFIG.search.semantic.index_embeddings
+        && table
+            .index_stats(DEFAULT_CHUNKS_EMBEDDING_FIELD)
+            .await
+            .into_diagnostic()?
+            .is_none()
+    {
+        // See [LanceDB indexing](https://lancedb.github.io/lancedb/concepts/index_ivfpq/#product-quantization) for more information
+        table
+            .create_index(
+                &[DEFAULT_CHUNKS_EMBEDDING_FIELD],
+                lancedb::index::Index::IvfPq(IvfPqIndexBuilder::default()),
+            )
+            .execute()
+            .await
+            .into_diagnostic()?;
+    } else if !CONFIG.search.semantic.index_embeddings
+        && table
+            .index_stats(DEFAULT_CHUNKS_EMBEDDING_FIELD)
+            .await
+            .into_diagnostic()?
+            .is_some()
+    {
+        table
+            .drop_index(DEFAULT_CHUNKS_EMBEDDING_FIELD)
+            .await
+            .into_diagnostic()?;
+        table
+            .optimize(OptimizeAction::Index(OptimizeOptions::default()))
+            .await
+            .into_diagnostic()?;
+    }
+
+    info!("Table: {:?}", table.schema().await.into_diagnostic()?);
+
+    let search_params = SearchParams::default();
+
+    let vector_store = Arc::new(
+        LanceDbVectorIndex::new(
+            table.clone(),
+            embedding_model.clone(),
+            DEFAULT_CHUNKS_ID_FIELD,
+            search_params,
+        )
+        .await
+        .into_diagnostic()?,
+    );
+
+    Ok((ndims, table, embedding_model, vector_store))
+}
+```
+
+
+
+---
+
+**Name:** `main`
+- **Kind:** `Function`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/main.rs`
+    - Range: lines 17-80, columns 1-2
+
+- **Code:**
+```
+#[tokio::main]
+async fn main() -> Result<()> {
+    let _log_guard = init_logger()?;
+    info!(
+        "Starting server in work directory: {}",
+        std::env::current_dir().into_diagnostic()?.display()
+    );
+   CUT---------------
+```
+
+
+
+---
+
+**Name:** `(path_event_tx, path_event_rx)`
+- **Kind:** `Variable`
+- **Container:** main
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/main.rs`
+    - Range: lines 25-25, columns 5-90
+
+- **Code:**
+```
+    let (path_event_tx, path_event_rx) = tokio::sync::mpsc::channel(CONFIG.channel_size);
+```
+
+---
+
+## Fuzzy Rules
+
+
+
+- Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
+
+- Never create a `new` method; instead, implement the `From` trait if it possible.
+
+- Prefer using `inspect_err`, the `error!` macro, and error propagation instead of `map_err`
+
+- Re-exporting is strictly prohibited in the project
+
+- The following symbols were found: [
+
+    LspServerSubsystem, 
+
+    McpServerSubsystem, 
+
+    McpServerSubsystem
+
+].
+For all such structures, you must implement `#[derive(Debug)]`.
+
+
+- Try to write code in a way that is easy to understand and maintain
+
+
+
+## Fuzzy Symbols
+
+
+
+---
+
+**Name:** `LspServerSubsystem`
+- **Kind:** `Struct`
+- **Container:** (none)
+- **Location:** 
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/subsystems/lsp.rs`
+    - Range: lines 87-87, columns 12-30
+
+- **Code:**
+```
+pub struct LspServerSubsystem {
+```
+
+
+
+---
+
+### Guidance for Code Generation
+
+- When generating code based on the discovered symbols, **always respect the rules listed under "Semantic Rules" and "Fuzzy Rules"** for each respective symbol category.
+- The rules are provided as `Vec` collections and must be strictly followed during code synthesis, refactoring, or analysis.
+- **Reuse already implemented entities** from the lists above whenever possible, instead of generating new ones.
+- If a rule set is empty, proceed with standard code generation practices for that symbol category.
+
+Use this symbol and rule list to analyze the project structure, search for relevant entities, and guide meaningful, context-aware code-related responses.
+
+```
+
 ### MCP Integration
 
 Once running, Semantrix exposes an MCP server that can be integrated with:
