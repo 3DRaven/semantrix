@@ -1,0 +1,45 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cargo",
+			"command": "build",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build",
+			"label": "rust: cargo build"
+		},
+		{
+			"type": "cargo",
+			"command": "build",
+			"args": [
+				"--release"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build",
+			"label": "rust: cargo build release"
+		},
+		{
+			"type": "cargo",
+			"command": "doc",
+			"args": [
+				"--open"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build",
+			"label": "rust: cargo doc open"
+		},
+		{
+			"label": "rust: cargo fix warnings and build",
+			"type": "shell",
+			"command": "cargo fix --allow-staged --allow-dirty;cargo clippy --fix --allow-staged --allow-dirty; cargo fmt;cargo build",
+			"group": "build",
+			"problemMatcher": []
+		}
+	]
+}

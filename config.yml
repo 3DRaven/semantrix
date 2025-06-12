@@ -1,0 +1,94 @@
+debounce_sec: 1 # time to collect events of filesystem changes
+debug: false # true for tokio-console and verbose logging
+shutdown_timeout: 3000 # time to wait for the subsystem to shutdown
+channel_size: 100 # number of messages to keep in the channel between subsystems
+response: Prompt # Prompt (prompt from template in templates folder) or raw Json response type
+log_dir: "/home/i3draven/fun/Rust/semantrix/logs" # path to the logs directory, will be used to store the logs
+rules: "/home/i3draven/fun/Rust/semantrix/resources/templates/rules.yml" # path to the rules file, will be used to store the rules
+templates: # used jinja 2 templates with https://docs.rs/tera/1.20.0/tera/
+  templates_path: "/home/i3draven/fun/Rust/semantrix/resources/templates/**/*" # path in glob formatto the templates directory, will be used to store the templates
+  prompt: "prompt.md" # name of the template to use for the prompt
+  description:
+    server: "description/server.md" # name of the template to use for the MCP server description
+    fuzzy_query: "description/fuzzy_query.md" # name of the template to use for the fuzzy query description
+    semantic_query: "description/semantic_query.md" # name of the template to use for the semantic query description
+search:
+  fuzzy:
+    lsp_server: "rust-analyzer" # name of the LSP server to use as stdio server runed by mcp-lsp-bridge
+    server_args: # arguments to pass to the LSP server (rust-analyzer in this case) as command line arguments
+      - --log-file
+      - rust-analyzer.log
+    workspace_uri: "file:///home/i3draven/fun/Rust/semantrix/src" # uri of the workspace, will be sent to the LSP server as workspaceFolders to scan for symbols
+    parallelizm: 1 # how many requests can be sent to the LSP server at the same time, attention rust-analyzer can't handle more than 1 request at a time
+    # options for the LSP server, see https://rust-analyzer.github.io/book/configuration.html
+    # they will send to the LSP server as initialization options json (converted to json Value), see https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize
+    server_options: # options for rust-analyzer, for other LSP servers you must use different options
+      lru:
+        capacity: 44
+      memoryLimit: 512
+      cargo:
+        loadOutDirsFromCheck: false
+      workspace:
+        symbol:
+          search:
+            kind: all_symbols
+            scope: workspace
+            limit: 32
+    debounce_sec: 1 # time to collect events of filesystem changes
+    debug: false # true for tokio-console and verbose logging
+    shutdown_timeout: 3000 # time to wait for the subsystem to shutdown
+    channel_size: 100 # number of messages to keep in the channel between subsystems
+  semantic:
+    # if download_model is false, the model must be in the models_dir
+    # the model must be in the models_dir in the following structure:
+    # ${models_dir}/${model_name}/${model_file}  as example: ${models_dir}/all-mini-lm-l6-v2-q/model.onnx
+    # ${models_dir}/${model_name}/tokenizer.json
+    # ${models_dir}/${model_name}/config.json
+    # ${models_dir}/${model_name}/special_tokens_map.json
+    # ${models_dir}/${model_name}/tokenizer_config.json
+    # if download_model is true, the model will be downloaded from Hugging Face and stored in the models_dir
+    download_model: true
+    models_dir: "/home/i3draven/fun/Rust/semantrix/resources/models" # path to the models directory, will be used to store the models
+    # model to use for the embeddings
+    # at first run it will be downloaded automatically
+    # available models:
+    # "all-mini-lm-l6-v2" => EmbeddingModel::AllMiniLML6V2,
+    # "all-mini-lm-l6-v2-q" => EmbeddingModel::AllMiniLML6V2Q,
+    # "all-mini-lm-l12-v2" => EmbeddingModel::AllMiniLML12V2,
+    # "all-mini-lm-l12-v2-q" => EmbeddingModel::AllMiniLML12V2Q,
+    # "bge-base-en-v1.5" => EmbeddingModel::BGEBaseENV15,
+    # "bge-base-en-v1.5-q" => EmbeddingModel::BGEBaseENV15Q,
+    # "bge-large-en-v1.5" => EmbeddingModel::BGELargeENV15,
+    # "bge-large-en-v1.5-q" => EmbeddingModel::BGELargeENV15Q,
+    # "bge-small-en-v1.5" => EmbeddingModel::BGESmallENV15,
+    # "bge-small-en-v1.5-q" => EmbeddingModel::BGESmallENV15Q,
+    # "nomic-embed-text-v1" => EmbeddingModel::NomicEmbedTextV1,
+    # "nomic-embed-text-v1.5" => EmbeddingModel::NomicEmbedTextV15,
+    # "nomic-embed-text-v1.5-q" => EmbeddingModel::NomicEmbedTextV15Q,
+    # "paraphrase-mini-lm-l12-v2" => EmbeddingModel::ParaphraseMLMiniLML12V2,
+    # "paraphrase-mini-lm-l12-v2-q" => EmbeddingModel::ParaphraseMLMiniLML12V2Q,
+    # "paraphrase-mpnet-base-v2" => EmbeddingModel::ParaphraseMLMpnetBaseV2,
+    # "bge-small-zh-v1.5" => EmbeddingModel::BGESmallZHV15,
+    # "multilingual-e5-small" => EmbeddingModel::MultilingualE5Small,
+    # "multilingual-e5-base" => EmbeddingModel::MultilingualE5Base,
+    # "multilingual-e5-large" => EmbeddingModel::MultilingualE5Large,
+    # "mxbai-embed-large-v1" => EmbeddingModel::MxbaiEmbedLargeV1,
+    # "mxbai-embed-large-v1-q" => EmbeddingModel::MxbaiEmbedLargeV1Q,
+    # "gte-base-en-v1.5" => EmbeddingModel::GTEBaseENV15,
+    # "gte-base-en-v1.5-q" => EmbeddingModel::GTEBaseENV15Q,
+    # "gte-large-en-v1.5" => EmbeddingModel::GTELargeENV15,
+    # "gte-large-en-v1.5-q" => EmbeddingModel::GTELargeENV15Q,
+    # "clip-vit-b-32-text" => EmbeddingModel::ClipVitB32,
+    # "jina-embeddings-v2-base-code" => EmbeddingModel::JinaEmbeddingsV2BaseCode,
+    model: "all-mini-lm-l6-v2-q" # model to use for the embeddings
+    lancedb_store: "/home/i3draven/fun/Rust/semantrix/resources/lancedb-store" # path to the lancedb store, will be used to store the embeddings
+    chunk_size: 5 # size of the chunk of code to semantically index
+    overlap_size: 2 # overlap of the chunks
+    # pattern to match the files to index as example: **/*.{rs,kt,c}
+    # after semantic search will be used LSP server to get the symbols from the codebase,
+    # so you must use pattern of files supported by LSP server
+    pattern: "**/*.{rs}"
+    batch_size: 100 # number of chunks to send to vector store at once
+    search_limit: 10 # number of chunks to return in the semantic search
+    # See [LanceDB indexing](https://lancedb.github.io/lancedb/concepts/index_ivfpq/#product-quantization) for more information
+    index_embeddings: false # index embeddings has less precision but faster search, for small code base is better to disable

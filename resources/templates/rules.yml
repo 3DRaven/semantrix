@@ -1,0 +1,37 @@
+common: # common rules attached to all responses
+    - Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
+    - Never create a `new` method; instead, implement the `From` trait if it possible.
+    - Prefer using `inspect_err`, the `error!` macro, and error propagation instead of `map_err`
+    - Re-exporting is strictly prohibited in the project
+
+# rules attached to the response depends on some kind of symbol if all of the rule matchers are
+# matched then the rule is attached to the response
+depends_on:
+    - # regex patterns to match the kind of the symbol to filter, if any of the patterns is matched then
+      # the kind part of rule matchers is considered as matched
+      # see https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind for more information
+      kind:
+          - ".*Struct.*"
+      # regex patterns to match the name of the symbol, if any of the patterns is matched then
+      # the name part of rule matchers is considered as matched
+      name:
+          - ".*"
+      # glob patterns to match the path of the symbol https://docs.rs/glob/latest/glob/,
+      # if any of the patterns is matched then the path part of rule matchers is considered as matched
+      path:
+          - "**"
+      # regex patterns to match the code of the symbol, if any of the patterns is matched then
+      # the code part of rule matchers is considered as matched
+      code:
+          - ".*"
+      # rules to attach to the response if all parts of the rule matchers are matched, it is a jinja2
+      # templates with symbols variable containing list of symbols matched by the rule patterns
+      rules:
+          - | # multiline string with jinja2 template
+            The following symbols were found: [
+            {% for symbol in symbols %}
+                {{ symbol.name }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+            ].
+            For all such structures, you must implement `#[derive(Debug)]`.
+          - Try to write code in a way that is easy to understand and maintain

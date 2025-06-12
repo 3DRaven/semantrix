@@ -1,0 +1,44 @@
+{
+	// Place your snippets for rust here. Each snippet is defined under a snippet name and has a prefix, body and 
+	// description. The prefix is what is used to trigger the snippet and the body will be expanded and inserted. Possible variables are:
+	// $1, $2 for tab stops, $0 for the final cursor position, and ${1:label}, ${2:another} for placeholders. Placeholders with the 
+	// same ids are connected.
+	// Example:
+	// "Print to console": {
+	// 	"prefix": "log",
+	// 	"body": [
+	// 		"console.log('$1');",
+	// 		"$2"
+	// 	],
+	// 	"description": "Log output to console"
+	// }
+	"Garde skip": {
+		"prefix": "skip",
+		"body": [
+			"#[garde(skip)]$0"
+		],
+		"description": "Insert garde skip"
+	},
+	"Garde dive": {
+		"prefix": "dive",
+		"body": [
+			"#[garde(dive)]$0"
+		],
+		"description": "Insert garde dive"
+	},
+    "Garde range": {
+		"prefix": "range",
+		"body": [
+			"#[garde(range(min=$0,max=))]"
+		],
+		"description": "Insert garde range"
+	},
+    "Garde length": {
+		"prefix": "length",
+		"body": [
+			"#[garde(length(min=$0,max=))]"
+		],
+		"description": "Insert garde length"
+	}
+
+}

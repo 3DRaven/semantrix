@@ -1,0 +1,1 @@
+Short descriptions or fragments of possible code constructs, used for semantic search in code and comments
