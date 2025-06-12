@@ -166,6 +166,22 @@ Semantrix supports numerous pre-trained embedding models:
 cargo run --release
 ```
 
+### LLM integration
+
+```json
+{
+  "mcpServers": {
+    "semantrix": {
+      "command": "sh",
+      "args": [
+        "/home/i3draven/fun/Rust/semantrix/start.sh"
+      ],
+      "env": []
+    },
+  }
+}
+```
+
 ### Call example
 
 #### Request
