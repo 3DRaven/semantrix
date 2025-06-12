@@ -156,16 +156,6 @@ Semantrix supports numerous pre-trained embedding models:
 
 ## Usage
 
-### Starting the Server
-
-```bash
-# Using the provided script
-./start.sh
-
-# Or directly
-cargo run --release
-```
-
 ### LLM integration
 
 ```json
