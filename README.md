@@ -1,6 +1,6 @@
 # Semantrix
 
-An advanced Model Context Protocol (MCP) server that provides intelligent semantic and fuzzy search capabilities across project codebases. Semantrix enables LLMs and developers to efficiently discover, reuse, and analyze existing code through sophisticated AI-powered search mechanisms.
+An advanced Model Context Protocol (MCP) server that provides intelligent semantic and fuzzy search capabilities across project codebases. Semantrix enables LLMs and developers to efficiently discover, reuse, and analyze existing code through sophisticated AI-powered search mechanisms. This approach makes it possible, even in large projects, to avoid regenerating code that does not fit into the neural network’s context. Instead, the model can request known parts of the project as concise summaries.
 
 ## Overview
 
