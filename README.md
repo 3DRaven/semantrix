@@ -1,6 +1,8 @@
 # Semantrix
 
-An advanced Model Context Protocol (MCP) server that provides intelligent semantic and fuzzy search capabilities across project codebases. Semantrix enables LLMs and developers to efficiently discover, reuse, and analyze existing code through sophisticated AI-powered search mechanisms. This approach makes it possible, even in large projects, to avoid regenerating code that does not fit into the neural network’s context. Instead, the model can request known parts of the project as concise summaries.
+A Model Context Protocol (MCP) server designed not just for searching, but for orchestrating code generation workflows based on discovered rules and a custom prompt template for the language model. Semantrix enables LLMs and developers to retrieve relevant code fragments using intelligent semantic (RAG) and fuzzy (LSP/rust-analyzer etc.) search, then leverages these results—together with user-defined rules and prompt templates—to guide the LLM in how to process, reuse, or transform the found code.
+
+This approach allows the system to select and include only the rules relevant to the retrieved symbols, rather than loading the entire rule set into the model’s context. As a result, even with a large collection of rules, only the pertinent ones occupy space in the LLM context, reducing context window usage and improving efficiency
 
 ## Overview
 
@@ -13,9 +15,10 @@ The system continuously monitors your codebase, maintains semantic embeddings of
 
 ## Key Features
 
-### 🔍 **Dual Search Capabilities**
-- **Semantic Search**: Find code using natural language descriptions or partial code constructs
-- **Fuzzy Name Matching**: Locate symbols using partial or complete names with tolerance for typos
+### 🎯 **Code Reuse Focus**
+- Designed to identify already implemented solutions
+- Reduces code duplication and promotes reuse
+- Helps discover existing patterns and implementations
 
 ### 🤖 **AI-Powered Code Discovery**
 - Machine learning embeddings for contextual code understanding
@@ -32,48 +35,13 @@ The system continuously monitors your codebase, maintains semantic embeddings of
 - Symbol-based searches with workspace-wide scope
 - Configurable parallelism and search parameters
 
-### 🎯 **Code Reuse Focus**
-- Designed to identify already implemented solutions
-- Reduces code duplication and promotes reuse
-- Helps discover existing patterns and implementations
-
-### ⚙️ **Additional rules and templates**
-- User can add additional rules from rules.yaml file to search result.
-- Both the server description and the generated prompt can be customized using templates included in the project.
-- Custom templates (jinja2 sintax) support dynamic insertion of variables and flexible formatting, making it possible to tailor
-  responses and instructions to your specific workflow and requirements.
-
-## Architecture
-
-Semantrix uses a multi-subsystem architecture with graceful shutdown handling:
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Watcher   │───▶│   Chunker   │───▶│   Indexer   │
-│ Subsystem   │    │ Subsystem   │    │ Subsystem   │
-└─────────────┘    └─────────────┘    └─────────────┘
-                                             │
-┌─────────────┐    ┌─────────────┐           │
-│ LSP Server  │    │ MCP Server  │◀──────────┘
-│ Subsystem   │───▶│ Subsystem   │
-└─────────────┘    └─────────────┘
-```
-
-### Subsystems
-
-- **Watcher**: Monitors file system changes using notify
-- **Chunker**: Splits code files into semantic chunks with configurable overlap
-- **Indexer**: Generates embeddings and stores them in LanceDB
-- **LSP Server**: Manages Language Server Protocol communication
-- **MCP Server**: Provides MCP protocol interface for external clients
-
 ## Installation & Setup
 
 ### Prerequisites
 
 - Rust 2024 edition or later
 - Linux, macOS, or Windows
-- Language Server Protocol server (e.g., rust-analyzer for Rust projects)
+- Language Server Protocol server (e.g., rust-analyzer for Rust projects or other LSP)
 
 ### Building from Source
 
@@ -85,62 +53,7 @@ cargo build --release
 
 ### Configuration
 
-Create a `config.yml` file in the project root. Here's a basic configuration:
-
-```yaml
-# General settings
-debounce_sec: 1
-debug: false
-shutdown_timeout: 3000
-channel_size: 100
-response: Prompt
-
-# Logging
-log_dir: "./logs"
-
-# Templates
-templates:
-  templates_path: "./resources/templates/**/*"
-  prompt: "prompt.md"
-  description:
-    server: "description/server.md"
-    fuzzy_query: "description/fuzzy_query.md"
-    semantic_query: "description/semantic_query.md"
-
-# Search configuration
-search:
-  fuzzy:
-    lsp_server: "rust-analyzer"
-    server_args:
-      - --log-file
-      - rust-analyzer.log
-    workspace_uri: "file:///path/to/your/project/src"
-    parallelizm: 1
-    server_options:
-      lru:
-        capacity: 44
-      memoryLimit: 512
-      cargo:
-        loadOutDirsFromCheck: false
-      workspace:
-        symbol:
-          search:
-            kind: all_symbols
-            scope: workspace
-            limit: 32
-
-  semantic:
-    download_model: true
-    models_dir: "./resources/models"
-    model: "all-mini-lm-l6-v2-q"
-    lancedb_store: "./resources/lancedb-store"
-    chunk_size: 5
-    overlap_size: 2
-    pattern: "**/*.{rs,py,js,ts,java,c,cpp,h,hpp}"
-    batch_size: 100
-    search_limit: 10
-    index_embeddings: false
-```
+Create a `config.yml` file in the project root. Example in project with descriptive comments.
 
 ### Available Embedding Models
 
@@ -195,7 +108,7 @@ The launch script must be modified to match the location of your MCP server.
 
 #### Response
 
-The answer has been shortened for convenience
+The answer has been shortened for convenience and can be customized with in project templates without rebuilding, it just jinja2 templates.
 
 ```markdown
 ## Semantic Rules
@@ -232,49 +145,6 @@ Once running, Semantrix exposes an MCP server that can be integrated with:
 - **Other MCP clients**: Connect via stdio transport
 - **Custom applications**: Use any MCP-compatible client library
 
-### Search Capabilities
-
-#### Semantic Search
-Query using natural language descriptions:
-- "function that handles HTTP requests"
-- "error handling with custom types"
-- "database connection pooling"
-
-#### Fuzzy Search
-Search using symbol names or patterns:
-- "HttpHandler"
-- "connect_db"
-- "Error"
-
-## Configuration Options
-
-### Core Settings
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `debounce_sec` | File change debouncing time | 1 |
-| `debug` | Enable debug logging and tokio-console | false |
-| `shutdown_timeout` | Graceful shutdown timeout (ms) | 3000 |
-| `channel_size` | Inter-subsystem channel buffer size | 100 |
-
-### Semantic Search Settings
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `model` | Embedding model to use | "all-mini-lm-l6-v2-q" |
-| `chunk_size` | Lines per code chunk | 5 |
-| `overlap_size` | Overlap between chunks | 2 |
-| `search_limit` | Max results returned | 10 |
-| `batch_size` | Embedding batch size | 100 |
-
-### LSP Settings
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `lsp_server` | LSP server executable | "rust-analyzer" |
-| `workspace_uri` | Project workspace URI | Required |
-| `parallelizm` | Concurrent LSP requests | 1 |
-
 ### Debugging
 
 Enable debug mode in `config.yml`:
@@ -287,35 +157,10 @@ This enables:
 - tokio-console integration for async debugging
 - Detailed subsystem state information
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Model Download Fails**
-   - Check internet connection
-   - Verify `models_dir` permissions
-   - Try a different model
-
-2. **LSP Server Not Starting**
-   - Verify LSP server is installed
-   - Check `workspace_uri` path
-   - Review server arguments
-
-3. **High Memory Usage**
-   - Reduce `chunk_size` and `batch_size`
-   - Use quantized models (models ending in `-q`)
-   - Enable `index_embeddings: false`
-
-4. **Slow Indexing**
-   - Increase `batch_size`
-   - Use smaller embedding models
-   - Narrow file `pattern` matching
-
 ### Logs
 
 Check application logs in the configured `log_dir`:
 - `semantrix.log`: Main application log
-- `rust-analyzer.log`: LSP server log (if using rust-analyzer)
 
 ## License
 
@@ -323,4 +168,4 @@ This project is licensed under the terms specified in the LICENSE file.
 
 ---
 
-**Semantrix** empowers intelligent code discovery and reuse through advanced semantic search capabilities, making it an essential tool for modern development workflows and AI-assisted programming.
+**Semantrix** empowers intelligent code discovery and reuse with custom prompt generation through advanced semantic search capabilities, making it an essential tool for modern development workflows and AI-assisted programming.
