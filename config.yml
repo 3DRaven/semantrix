@@ -3,10 +3,10 @@ debug: false # true for tokio-console and verbose logging
 shutdown_timeout: 3000 # time to wait for the subsystem to shutdown
 channel_size: 100 # number of messages to keep in the channel between subsystems
 response: Prompt # Prompt (prompt from template in templates folder) or raw Json response type
-log_dir: "/home/i3draven/fun/Rust/semantrix/logs" # path to the logs directory, will be used to store the logs
-rules: "/home/i3draven/fun/Rust/semantrix/resources/templates/rules.yml" # path to the rules file, will be used to store the rules
+log_dir: "./logs" # path to the logs directory, will be used to store the logs
+rules: "./resources/templates/rules.yml" # path to the rules file, will be used to store the rules
 templates: # used jinja 2 templates with https://docs.rs/tera/1.20.0/tera/
-  templates_path: "/home/i3draven/fun/Rust/semantrix/resources/templates/**/*" # path in glob formatto the templates directory, will be used to store the templates
+  templates_path: "./resources/templates/**/*" # path in glob formatto the templates directory, will be used to store the templates
   prompt: "prompt.md" # name of the template to use for the prompt
   description:
     server: "description/server.md" # name of the template to use for the MCP server description
@@ -48,7 +48,7 @@ search:
     # ${models_dir}/${model_name}/tokenizer_config.json
     # if download_model is true, the model will be downloaded from Hugging Face and stored in the models_dir
     download_model: true
-    models_dir: "/home/i3draven/fun/Rust/semantrix/resources/models" # path to the models directory, will be used to store the models
+    models_dir: "./resources/models" # path to the models directory, will be used to store the models
     # model to use for the embeddings
     # at first run it will be downloaded automatically
     # available models:
@@ -81,7 +81,7 @@ search:
     # "clip-vit-b-32-text" => EmbeddingModel::ClipVitB32,
     # "jina-embeddings-v2-base-code" => EmbeddingModel::JinaEmbeddingsV2BaseCode,
     model: "all-mini-lm-l6-v2-q" # model to use for the embeddings
-    lancedb_store: "/home/i3draven/fun/Rust/semantrix/resources/lancedb-store" # path to the lancedb store, will be used to store the embeddings
+    lancedb_store: "./resources/lancedb-store" # path to the lancedb store, will be used to store the embeddings
     chunk_size: 5 # size of the chunk of code to semantically index
     overlap_size: 2 # overlap of the chunks
     # pattern to match the files to index as example: **/*.{rs,kt,c}

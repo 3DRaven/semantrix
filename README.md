@@ -78,11 +78,15 @@ The launch script must be modified to match the location of your MCP server.
   "mcpServers": {
     "semantrix": {
       "command": "sh",
-      "args": [
-        "/home/i3draven/fun/Rust/semantrix/start.sh"
-      ],
-      "env": []
-    },
+      "args": ["/home/i3draven/fun/Rust/semantrix/dist/start.sh"],
+      "options": {
+        "cwd": "/home/i3draven/fun/Rust/semantrix/dist"
+      },
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "SEMANTRIX_CONFIG_PATH": "/home/i3draven/fun/Rust/semantrix/dist/config.yml"
+      }
+    }
   }
 }
 ```
