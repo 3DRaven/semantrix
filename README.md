@@ -111,30 +111,36 @@ The launch script must be modified to match the location of your MCP server.
 The answer has been shortened for convenience and can be customized with in project templates without rebuilding, it just jinja2 templates.
 
 ```markdown
-## Semantic Rules
-- Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
 ## Semantic Symbols
----
-**Name:** `File`
-- **Kind:** `EnumMember`
-- **Container:** McpSymbolKind
-- **Location:** 
-    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/enums.rs`
-    - Range: lines 35-35, columns 5-13
-- **Code:**
+**No semantic symbols found.**
 ## Fuzzy Rules
-- Always implement the `From` trait where necessary instead of writing functions or implementing the `Into` trait
+- The following symbols were found: [
+    SemanticConfig
+].
+For all such structures, you must implement `#[derive(Debug)]`.
 ## Fuzzy Symbols
 ---
-**Name:** `LspServerSubsystem`
-- **Kind:** `Struct`
+
+- **Name:** `main`
+- **Kind:** `Function`
 - **Container:** (none)
 - **Location:** 
-    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/subsystems/lsp.rs`
-    - Range: lines 87-87, columns 12-30
+    - URI: `file:///home/i3draven/fun/Rust/semantrix/src/main.rs`
+    - Range: lines 25-25, columns 10-14
 
+- **Hover:** 
+semantrix
+fn main() -> Result<()>
+---
+# Panics
+
+This function panics if the logger initialization fails.
+
+# Errors
+
+This function returns a `Result` that is `Err` if the logger initialization fails.
 - **Code:**
-pub struct LspServerSubsystem {
+async fn main() -> Result<()> {
 ```
 
 ### MCP Integration
