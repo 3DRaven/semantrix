@@ -62,9 +62,6 @@ jobs:
           cp start.sh dist/
           cp README.md dist/
 
-      - name: Create zip archive
-        run: cd dist && zip -r ../semantrix-linux-x86_64.zip .
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
