@@ -1,3 +1,4 @@
+use line_column::line_column;
 use std::hash::{Hash, Hasher};
 use std::{
     collections::{HashMap, HashSet},
@@ -11,10 +12,11 @@ use std::{
 use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::Itertools;
 use lsp_types::{
-    DocumentSymbolResponse, Location, OneOf, Position, Range, WorkspaceSymbolResponse,
+    DocumentSymbolResponse, Hover, HoverContents, Location, MarkedString, OneOf, Position, Range,
+    WorkspaceSymbolResponse,
 };
 use miette::{IntoDiagnostic, Result};
-use regex::RegexSet;
+use regex::{Regex, RegexSet};
 use rig::vector_store::VectorStoreIndexDyn;
 use rig_fastembed::EmbeddingModel;
 use rig_lancedb::LanceDbVectorIndex;
@@ -51,6 +53,7 @@ pub struct SymbolInfo {
     pub location: Location,
     pub container_name: Option<String>,
     pub code: Option<String>,
+    pub hover: Option<String>,
 }
 
 impl SymbolInfo {
@@ -59,6 +62,23 @@ impl SymbolInfo {
             .uri
             .to_file_path()
             .map_err(|_| miette::miette!("Failed to convert URL {} to path", self.location.uri))
+    }
+
+    pub fn set_hover(&mut self, hover: Hover) {
+        self.hover = Some(match &hover.contents {
+            HoverContents::Scalar(s) => match s {
+                MarkedString::String(s) => s.to_owned(),
+                MarkedString::LanguageString(s) => s.value.to_owned(),
+            },
+            HoverContents::Array(s) => s
+                .iter()
+                .map(|s| match s {
+                    MarkedString::String(s) => s.to_owned(),
+                    MarkedString::LanguageString(s) => s.value.to_owned(),
+                })
+                .join("\n"),
+            HoverContents::Markup(s) => s.value.to_owned(),
+        })
     }
 }
 
@@ -418,6 +438,7 @@ async fn get_fuzzy_symbols(
                         location: symbol.location,
                         container_name: symbol.container_name,
                         code,
+                        hover: None,
                     }
                 });
 
@@ -444,10 +465,18 @@ async fn get_fuzzy_symbols(
                         },
                         container_name: symbol.container_name,
                         code,
+                        hover: None,
                     }
                 });
                 Either::Right(stream)
             }
+        })
+        .then(|mut it| async {
+            let hover = get_hover(lsp_server, &it).await;
+            if let Some(hover) = hover {
+                it.set_hover(hover);
+            }
+            it
         })
         .collect::<Vec<_>>()
         .await;
@@ -551,15 +580,14 @@ async fn get_semantic_symbols(
             .collect::<Vec<_>>()
     );
 
-    let symbols = grouped
-        .into_iter()
+    let symbols = stream::iter(grouped)
         .inspect(|it| {
             debug!("Grouped: {:?}", it.0);
         })
         .flat_map(|(_path, group)| {
             let sorted = group.into_iter().sorted();
             trace!("Sorted: {:?}", sorted);
-            sorted.scan(false, |seen_chunk, ptr| {
+            let scaned = sorted.scan(false, |seen_chunk, ptr| {
                 trace!("Seen chunk: {:#?} for ptr {:#?}", seen_chunk, &ptr);
                 match ptr {
                     DocumentPointer::Chunk(_) => {
@@ -575,13 +603,23 @@ async fn get_semantic_symbols(
                         }
                     }
                 }
-            })
+            });
+
+            stream::iter(scaned)
         })
-        .flatten()
-        .inspect(|it| {
-            info!("Semantic symbols after filtering: {:?}", it);
+        .filter_map(|it| async {
+            if let Some(mut it) = it {
+                let hover = get_hover(lsp_server, &it).await;
+                if let Some(hover) = hover {
+                    it.set_hover(hover);
+                }
+                Some(it)
+            } else {
+                None
+            }
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .await;
 
     Ok(symbols)
 }
@@ -636,6 +674,7 @@ pub fn get_documents_symbols(
                                         location: symbol.location,
                                         container_name: symbol.container_name,
                                         code,
+                                        hover: None,
                                     }
                                 });
 
@@ -653,6 +692,7 @@ pub fn get_documents_symbols(
                                         location: Location::new(document_uri.clone(), symbol.range),
                                         container_name: None,
                                         code,
+                                        hover: None,
                                     }
                                 });
                                 Either::Right(stream)
@@ -671,6 +711,64 @@ pub fn get_documents_symbols(
         })
         .flat_map(|it| it)
         .boxed()
+}
+
+async fn get_hover(lsp_server: &GuardedLspServer, symbol: &SymbolInfo) -> Option<Hover> {
+    if let Some(code) = &symbol.code {
+        if let Ok(re) = Regex::new(format!("(?m){}", symbol.name).as_str()) {
+            if let Some(m) = re.find(code) {
+                trace!(
+                    "Match found for: {} in {} from {} to {}",
+                    symbol.name,
+                    code,
+                    m.start(),
+                    m.end()
+                );
+                //end because it is precisely than start, rust-analyzer some time return wrong start position
+                //for name of symbol (as example `fn main` instead of `main` as function name), so when
+                //we try to find them in code, we need to use end
+                //local_line is 1 based index
+                //col is 1 based index
+                let (local_line, col) = line_column(code, m.end());
+                let line = symbol.location.range.start.line + local_line - 1;
+                info!(
+                    r#" Symbol positions:
+                        Line in file: {}
+                        Line in code fragment (1 based): {}
+                        Position in code fragment (1 based): {}
+                        Symbol code start line: {}
+                        Symbol code start position: {}
+                        Code fragment start position: {}
+                        Code fragment end position: {}"#,
+                    line,
+                    local_line,
+                    col + 1,
+                    symbol.location.range.start.line,
+                    symbol.location.range.start.character,
+                    m.start(),
+                    m.end()
+                );
+                let hover = lsp_server
+                    .send_hover_request(symbol.location.uri.clone(), Position::new(line, col - 1))
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(hover) = hover {
+                    info!("Hover: {:?}", hover);
+                    return Some(hover);
+                } else {
+                    trace!("No hover found for: {:?}", symbol);
+                }
+            } else {
+                trace!("No match found for: {} in {}", symbol.name, code);
+            }
+        } else {
+            trace!("Regex error for: {}", symbol.name);
+        }
+    } else {
+        trace!("No code found for: {:?}", symbol);
+    }
+    None
 }
 
 pub fn get_workspace_symbols(

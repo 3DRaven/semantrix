@@ -18,13 +18,14 @@ _No additional semantic rules specified._
 {% for symbol in semantic_symbols %}
 ---
 
-**Name:** `{{ symbol.name }}`
+- **Name:** `{{ symbol.name }}`
 - **Kind:** `{{ symbol.kind }}`
 - **Container:** {% if symbol.container_name is defined and symbol.container_name | default(value="") != "" %}{{ symbol.container_name }}{% else %}(none){% endif %}
 - **Location:** 
     - URI: `{{ symbol.location.uri }}`
     - Range: lines {{ symbol.location.range.start.line + 1 }}-{{ symbol.location.range.end.line + 1 }}, columns {{ symbol.location.range.start.character + 1 }}-{{ symbol.location.range.end.character + 1 }}
 {% if symbol.code is defined and symbol.code | default(value="") != "" %}
+- **Hover:** {% if symbol.hover is defined and symbol.hover | default(value="") != "" %}{{ symbol.hover }}{% else %}(none){% endif %}
 - **Code:**
 ```
 {{ symbol.code }}
@@ -54,13 +55,14 @@ _No additional fuzzy rules specified._
 {% for symbol in fuzzy_symbols %}
 ---
 
-**Name:** `{{ symbol.name }}`
+- **Name:** `{{ symbol.name }}`
 - **Kind:** `{{ symbol.kind }}`
 - **Container:** {% if symbol.container_name is defined and symbol.container_name | default(value="") != "" %}{{ symbol.container_name }}{% else %}(none){% endif %}
 - **Location:** 
     - URI: `{{ symbol.location.uri }}`
     - Range: lines {{ symbol.location.range.start.line + 1 }}-{{ symbol.location.range.end.line + 1 }}, columns {{ symbol.location.range.start.character + 1 }}-{{ symbol.location.range.end.character + 1 }}
 {% if symbol.code is defined and symbol.code | default(value="") != "" %}
+- **Hover:** {% if symbol.hover is defined and symbol.hover | default(value="") != "" %}{{ symbol.hover }}{% else %}(none){% endif %}
 - **Code:**
 ```
 {{ symbol.code }}

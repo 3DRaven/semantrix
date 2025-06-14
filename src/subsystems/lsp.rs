@@ -3,13 +3,15 @@ use async_lsp_client::{LspServer, ServerMessage};
 use async_trait::async_trait;
 use lsp_types::{
     ClientCapabilities, ClientInfo, DocumentSymbolClientCapabilities, DocumentSymbolParams,
-    DocumentSymbolResponse, InitializeParams, NumberOrString, PartialResultParams, ProgressParams,
-    ProgressParamsValue, SymbolKind, SymbolKindCapability, TextDocumentClientCapabilities,
-    TextDocumentIdentifier, Url, WindowClientCapabilities, WorkDoneProgress,
+    DocumentSymbolResponse, Hover, HoverClientCapabilities, HoverParams, InitializeParams,
+    MarkupKind, NumberOrString, PartialResultParams, Position, ProgressParams, ProgressParamsValue,
+    SymbolKind, SymbolKindCapability, TextDocumentClientCapabilities, TextDocumentIdentifier,
+    TextDocumentPositionParams, Url, WindowClientCapabilities, WorkDoneProgress,
     WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceFolder,
     WorkspaceSymbolClientCapabilities, WorkspaceSymbolParams, WorkspaceSymbolResponse,
     request::{
-        DocumentSymbolRequest, Request, Shutdown, WorkDoneProgressCreate, WorkspaceSymbolRequest,
+        DocumentSymbolRequest, HoverRequest, Request, Shutdown, WorkDoneProgressCreate,
+        WorkspaceSymbolRequest,
     },
 };
 use miette::{IntoDiagnostic, Result};
@@ -83,6 +85,31 @@ impl GuardedLspServer {
             })
             .into_diagnostic()
     }
+
+    pub async fn send_hover_request(
+        &self,
+        document_uri: Url,
+        position: Position,
+    ) -> Result<Option<Hover>> {
+        self.server
+            .send_request::<HoverRequest>(HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier::new(document_uri.clone()),
+                    position,
+                },
+                work_done_progress_params: WorkDoneProgressParams {
+                    work_done_token: None,
+                },
+            })
+            .await
+            .inspect(|it| {
+                info!("Hover response: {:?}", it);
+            })
+            .inspect_err(|e| {
+                error!("Error sending hover request: {:?}", e);
+            })
+            .into_diagnostic()
+    }
 }
 pub struct LspServerSubsystem {
     pub lsp_server_tx: Sender<Option<GuardedLspServer>>,
@@ -148,6 +175,10 @@ impl IntoSubsystem<miette::Report> for LspServerSubsystem {
                     ..Default::default()
                 }),
                 text_document: Some(TextDocumentClientCapabilities {
+                    hover: Some(HoverClientCapabilities {
+                        dynamic_registration: Some(false),
+                        content_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
+                    }),
                     document_symbol: Some(DocumentSymbolClientCapabilities {
                         dynamic_registration: Some(false),
                         hierarchical_document_symbol_support: Some(false),
