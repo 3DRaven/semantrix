@@ -25,7 +25,7 @@ target/
 rust-analyzer.log
 .fastembed_cache
 data/
-Cargo.lock
+#Cargo.lock
 models/
 resources/lancedb-store/
 resources/logs/
