@@ -176,6 +176,10 @@ This enables:
 Check application logs in the configured `log_dir`:
 - `semantrix.log`: Main application log
 
+### History
+
+- Added Hover generation to prompt context
+
 ## License
 
 This project is licensed under the terms specified in the LICENSE file.
