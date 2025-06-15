@@ -13,6 +13,10 @@ Semantrix is a Rust-based MCP server that combines two powerful search approache
 
 The system continuously monitors your codebase, maintains semantic embeddings of code chunks, and provides real-time search capabilities through the standardized MCP protocol.
 
+## Demo
+
+![Short demo video](./demo.gif)
+
 ## Key Features
 
 ### 🎯 **Code Reuse Focus**
