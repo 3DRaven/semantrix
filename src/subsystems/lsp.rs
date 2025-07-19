@@ -4,13 +4,14 @@ use async_trait::async_trait;
 use lsp_types::{
     ClientCapabilities, ClientInfo, DocumentSymbolClientCapabilities, DocumentSymbolParams,
     DocumentSymbolResponse, Hover, HoverClientCapabilities, HoverParams, InitializeParams,
-    MarkupKind, NumberOrString, PartialResultParams, Position, ProgressParams, ProgressParamsValue,
-    SymbolKind, SymbolKindCapability, TextDocumentClientCapabilities, TextDocumentIdentifier,
-    TextDocumentPositionParams, Url, WindowClientCapabilities, WorkDoneProgress,
-    WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceFolder,
-    WorkspaceSymbolClientCapabilities, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    Location, MarkupKind, NumberOrString, PartialResultParams, Position, ProgressParams,
+    ProgressParamsValue, ReferenceContext, ReferenceParams, SymbolKind, SymbolKindCapability,
+    TextDocumentClientCapabilities, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+    WindowClientCapabilities, WorkDoneProgress, WorkDoneProgressParams,
+    WorkspaceClientCapabilities, WorkspaceFolder, WorkspaceSymbolClientCapabilities,
+    WorkspaceSymbolParams, WorkspaceSymbolResponse,
     request::{
-        DocumentSymbolRequest, HoverRequest, Request, Shutdown, WorkDoneProgressCreate,
+        DocumentSymbolRequest, HoverRequest, References, Request, Shutdown, WorkDoneProgressCreate,
         WorkspaceSymbolRequest,
     },
 };
@@ -82,6 +83,35 @@ impl GuardedLspServer {
             })
             .inspect_err(|e| {
                 error!("Error sending document symbol request: {:?}", e);
+            })
+            .into_diagnostic()
+    }
+
+    pub async fn send_references_request(
+        &self,
+        document_uri: Url,
+        position: Position,
+    ) -> Result<Option<Vec<Location>>> {
+        self.server
+            .send_request::<References>(ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier::new(document_uri.clone()),
+                    position,
+                },
+                work_done_progress_params: WorkDoneProgressParams {
+                    work_done_token: None,
+                },
+                partial_result_params: PartialResultParams::default(),
+                context: ReferenceContext {
+                    include_declaration: false,
+                },
+            })
+            .await
+            .inspect(|it| {
+                info!("References response: {:?}", it);
+            })
+            .inspect_err(|e| {
+                error!("Error sending references request: {:?}", e);
             })
             .into_diagnostic()
     }

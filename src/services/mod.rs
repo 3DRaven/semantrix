@@ -1,12 +1,11 @@
+pub mod mcp;
 use line_column::line_column;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
 };
 
 use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
@@ -20,33 +19,22 @@ use regex::{Regex, RegexSet};
 use rig::vector_store::VectorStoreIndexDyn;
 use rig_fastembed::EmbeddingModel;
 use rig_lancedb::LanceDbVectorIndex;
-use rmcp::{
-    Error, ServerHandler,
-    model::{
-        CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
-    },
-    tool,
-};
-use schemars::{
-    JsonSchema, SchemaGenerator,
-    schema::{InstanceType, ObjectValidation, Schema, SchemaObject},
-};
+use rmcp::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use tera::Tera;
-use tokio::sync::watch::{self};
 use tracing::{debug, error, info, trace};
 use url::Url;
 use wax::{Glob, Pattern};
 
 use crate::{
-    CONFIG, NAME, ResponseType, TERA, VERSION,
+    CONFIG,
     subsystems::{
         chunker::{ChunkId, DocumentPointer},
         lsp::GuardedLspServer,
     },
 };
 
-#[derive(Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: String,
@@ -54,6 +42,7 @@ pub struct SymbolInfo {
     pub container_name: Option<String>,
     pub code: Option<String>,
     pub hover: Option<String>,
+    pub name_position: Option<Position>,
 }
 
 impl SymbolInfo {
@@ -205,215 +194,6 @@ impl Ruleset {
     }
 }
 
-impl std::fmt::Debug for SymbolInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{{{}:{}:{}:{}}}",
-            self.name, self.kind, self.location.uri, self.location.range.start.line
-        )
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CodeReuseSearchRequest {
-    pub semantic_queries: Vec<String>,
-    pub name_patterns: Vec<String>,
-}
-
-impl JsonSchema for CodeReuseSearchRequest {
-    fn schema_name() -> String {
-        "CodeReuseSearchRequest".to_owned()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        let mut context = tera::Context::new();
-        context.insert("name", &NAME);
-        context.insert("version", &VERSION);
-        let semantic_queries_desc = TERA
-            .render(
-                &CONFIG.templates.description.semantic_query.clone(),
-                &context,
-            )
-            .expect("Failed to render template");
-
-        let name_patterns_desc = TERA
-            .render(&CONFIG.templates.description.fuzzy_query.clone(), &context)
-            .expect("Failed to render template");
-
-        let mut semantic_queries_schema = generator.subschema_for::<Vec<String>>();
-        if let Schema::Object(ref mut obj) = semantic_queries_schema {
-            obj.metadata().description = Some(semantic_queries_desc.to_string());
-        }
-
-        let mut name_patterns_schema = generator.subschema_for::<Vec<String>>();
-        if let Schema::Object(ref mut obj) = name_patterns_schema {
-            obj.metadata().description = Some(name_patterns_desc.to_string());
-        }
-
-        let schema_obj = SchemaObject {
-            instance_type: Some(InstanceType::Object.into()),
-            object: Some(Box::new(ObjectValidation {
-                properties: [
-                    ("semantic_queries".to_string(), semantic_queries_schema),
-                    ("name_patterns".to_string(), name_patterns_schema),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-                required: vec!["semantic_queries".to_string(), "name_patterns".to_string()]
-                    .into_iter()
-                    .collect(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-
-        Schema::Object(schema_obj)
-    }
-}
-
-#[derive(Clone)]
-pub struct CodeReuseSearchService {
-    pub vector_store: Arc<LanceDbVectorIndex<EmbeddingModel>>,
-    pub lsp_server_rx: watch::Receiver<Option<GuardedLspServer>>,
-    pub first_index_scan: Arc<AtomicBool>,
-}
-
-#[tool(tool_box)]
-impl CodeReuseSearchService {
-    #[tool(
-        description = "A tool that scans your project to identify code fragments and components that have already been implemented, allowing you to find and reuse existing solutions instead of rewriting them from scratch. This helps reduce duplication, improve development efficiency, and promote best practices in code maintenance and organization"
-    )]
-    pub async fn code_reuse_search(
-        &self,
-        #[tool(aggr)] CodeReuseSearchRequest {
-            semantic_queries,
-            name_patterns,
-        }: CodeReuseSearchRequest,
-    ) -> Result<CallToolResult, Error> {
-        let lsp_server = if let Some(lsp_server) = self.lsp_server_rx.borrow().clone() {
-            lsp_server
-        } else {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "Waiting for LSP server to be initialized".to_string(),
-            )]));
-        };
-
-        if !self.first_index_scan.load(Ordering::Relaxed) {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "Waiting for index to be initialized".to_string(),
-            )]));
-        }
-
-        info!("Starting to get symbols");
-
-        let (fuzzy_symbols, semantic_symbols) = tokio::try_join!(
-            get_fuzzy_symbols(&lsp_server, name_patterns),
-            get_semantic_symbols(&lsp_server, semantic_queries, self.vector_store.clone(),),
-        )
-        .inspect_err(|e| {
-            error!("Error getting symbols: {}", e);
-        })
-        .map_err(|e| Error::internal_error(format!("Failed to get symbols: {}", e), None))?;
-
-        debug!(
-            "Fuzzy symbols: {:?}, semantic symbols: {:?}",
-            fuzzy_symbols, semantic_symbols
-        );
-
-        // TODO: for POC loaded every request because user can update rules without restarting the server
-        let rules: Ruleset =
-            serde_yaml::from_reader(std::fs::File::open(&CONFIG.rules).map_err(|e| {
-                Error::internal_error(
-                    format!(
-                        "Failed to open rules file: {} with path: {}",
-                        e,
-                        &CONFIG.rules.to_string_lossy()
-                    ),
-                    None,
-                )
-            })?)
-            .map_err(|e| {
-                Error::internal_error(
-                    format!(
-                        "Failed to parse rules file: {} with path: {}",
-                        e,
-                        &CONFIG.rules.to_string_lossy()
-                    ),
-                    None,
-                )
-            })?;
-
-        let semantic_rules = rules.get_rules(semantic_symbols.clone()).map_err(|e| {
-            Error::internal_error(
-                format!(
-                    "Failed to get semantic rules: {} with path: {}",
-                    e,
-                    &CONFIG.rules.to_string_lossy()
-                ),
-                None,
-            )
-        })?;
-        let fuzzy_rules = rules.get_rules(fuzzy_symbols.clone()).map_err(|e| {
-            Error::internal_error(
-                format!(
-                    "Failed to get fuzzy rules: {} with path: {}",
-                    e,
-                    &CONFIG.rules.to_string_lossy()
-                ),
-                None,
-            )
-        })?;
-
-        if CONFIG.response == ResponseType::Json {
-            Ok(CallToolResult::success(vec![
-                Content::json(semantic_rules)?,
-                Content::json(fuzzy_rules)?,
-                Content::json(semantic_symbols)?,
-                Content::json(fuzzy_symbols)?,
-            ]))
-        } else {
-            let mut context = tera::Context::new();
-            context.insert("semantic_rules", &semantic_rules);
-            context.insert("fuzzy_rules", &fuzzy_rules);
-            context.insert("semantic_symbols", &semantic_symbols);
-            context.insert("fuzzy_symbols", &fuzzy_symbols);
-
-            let content = TERA
-                .render(&CONFIG.templates.prompt, &context)
-                .map_err(|e| {
-                    Error::internal_error(
-                        format!(
-                            "Failed to render template: {} with path: {}",
-                            e, &CONFIG.templates.prompt
-                        ),
-                        None,
-                    )
-                })?;
-            Ok(CallToolResult::success(vec![Content::text(content)]))
-        }
-    }
-}
-
-#[tool(tool_box)]
-impl ServerHandler for CodeReuseSearchService {
-    fn get_info(&self) -> ServerInfo {
-        let mut context = tera::Context::new();
-        context.insert("name", &NAME);
-        context.insert("version", &VERSION);
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                TERA.render(&CONFIG.templates.description.server.clone(), &context)
-                    .expect("Failed to render template"),
-            ),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct DocumentSymbols {
     pub path: Url,
@@ -423,15 +203,25 @@ pub struct DocumentSymbols {
 async fn get_fuzzy_symbols(
     lsp_server: &GuardedLspServer,
     possible_names: Vec<String>,
+    kinds: Option<Vec<Regex>>,
+    need_code_samples: bool,
 ) -> Result<Vec<SymbolInfo>> {
     info!("Getting fuzzy symbols for: {:?}", possible_names);
 
     let symbols = get_workspace_symbols(lsp_server, possible_names)
+        .await
         .flat_map(|response| match response {
             WorkspaceSymbolResponse::Flat(s) => {
                 let stream = stream::iter(s).map(|symbol| {
                     let location = symbol.location.clone();
-                    let code = get_code_from_document(location.uri, Some(location.range));
+                    let code = if need_code_samples {
+                        get_code_from_document(location.uri, Some(location.range))
+                    } else {
+                        None
+                    };
+                    let name_position = code
+                        .as_ref()
+                        .and_then(|code| get_name_position(&symbol.name, code, &symbol.location));
                     SymbolInfo {
                         name: symbol.name,
                         kind: format!("{:?}", symbol.kind),
@@ -439,6 +229,7 @@ async fn get_fuzzy_symbols(
                         container_name: symbol.container_name,
                         code,
                         hover: None,
+                        name_position,
                     }
                 });
 
@@ -448,33 +239,67 @@ async fn get_fuzzy_symbols(
                 let stream = stream::iter(s).map(|symbol| {
                     let code = match symbol.location.clone() {
                         OneOf::Left(location) => {
-                            get_code_from_document(location.uri, Some(location.range))
+                            if need_code_samples {
+                                get_code_from_document(location.uri, Some(location.range))
+                            } else {
+                                None
+                            }
                         }
-                        OneOf::Right(location) => get_code_from_document(location.uri, None),
+                        OneOf::Right(location) => {
+                            if need_code_samples {
+                                get_code_from_document(location.uri, None)
+                            } else {
+                                None
+                            }
+                        }
                     };
+
+                    let location = match symbol.location {
+                        OneOf::Left(location) => location,
+                        OneOf::Right(location) => Location::new(
+                            location.uri,
+                            Range::new(Position::new(0, 0), Position::new(0, 0)),
+                        ),
+                    };
+
+                    let name_position = code
+                        .as_ref()
+                        .and_then(|code| get_name_position(&symbol.name, code, &location));
 
                     SymbolInfo {
                         name: symbol.name,
                         kind: format!("{:?}", symbol.kind),
-                        location: match symbol.location {
-                            OneOf::Left(location) => location,
-                            OneOf::Right(location) => Location::new(
-                                location.uri,
-                                Range::new(Position::new(0, 0), Position::new(0, 0)),
-                            ),
-                        },
+                        location,
                         container_name: symbol.container_name,
                         code,
                         hover: None,
+                        name_position,
                     }
                 });
                 Either::Right(stream)
             }
         })
+        .filter_map(|symbol| async {
+            if let Some(kinds) = &kinds {
+                if kinds
+                    .iter()
+                    .any(|kind| kind.is_match(&format!("{:?}", symbol.kind)))
+                {
+                    Some(symbol)
+                } else {
+                    debug!("Not matched kind: {:?}", symbol.kind);
+                    None
+                }
+            } else {
+                Some(symbol)
+            }
+        })
         .then(|mut it| async {
-            let hover = get_hover(lsp_server, &it).await;
-            if let Some(hover) = hover {
-                it.set_hover(hover);
+            if need_code_samples {
+                let hover = get_hover(lsp_server, &it).await;
+                if let Some(hover) = hover {
+                    it.set_hover(hover);
+                }
             }
             it
         })
@@ -541,7 +366,7 @@ async fn get_semantic_symbols(
 
     info!("Paths: {:?}", paths);
 
-    let documents = get_documents_symbols(lsp_server, paths)
+    let documents = get_documents_symbols(lsp_server, paths, true)
         .collect::<Vec<_>>()
         .await;
 
@@ -643,9 +468,75 @@ fn get_code_from_document(document_uri: Url, location: Option<Range>) -> Option<
     None
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolPlaceTo {
+    pub symbol_info: SymbolInfo,
+    pub place_to: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolReferences {
+    pub symbol_info: SymbolInfo,
+    pub references: Vec<Location>,
+}
+
+pub fn get_symbols_references(
+    lsp_server: &GuardedLspServer,
+    symbol_infos: Vec<SymbolInfo>,
+) -> impl Stream<Item = SymbolReferences> + Send {
+    info!("Starting request to get symbols references");
+
+    stream::iter(symbol_infos)
+        .filter_map(|it| async {
+            if CONFIG
+                .placer
+                .final_symbol_kinds
+                .iter()
+                .any(|pattern| pattern.is_match(&it.kind))
+            {
+                Some(it)
+            } else {
+                None
+            }
+        })
+        .map(move |symbol_info| {
+            let guarded_lsp_server = lsp_server.clone();
+            async move {
+                info!(
+                    "Sending request to get symbols references for: {:?}",
+                    symbol_info
+                );
+                guarded_lsp_server
+                    .send_references_request(
+                        symbol_info.location.uri.clone(),
+                        symbol_info
+                            .name_position
+                            .unwrap_or(symbol_info.location.range.start),
+                    )
+                    .await
+                    .map(|it| {
+                        it.map(|it| SymbolReferences {
+                            symbol_info: symbol_info.clone(),
+                            references: it,
+                        })
+                    })
+            }
+        })
+        .filter_map(|it| async {
+            it.await
+                .inspect_err(|err| {
+                    error!("Error getting symbols references: {}", err);
+                })
+                .ok()
+                .flatten()
+        })
+        .boxed()
+}
+
 pub fn get_documents_symbols(
     lsp_server: &GuardedLspServer,
     documents_uris: HashSet<Url>,
+    need_code_samples: bool,
 ) -> impl Stream<Item = SymbolInfo> + Send {
     info!("Starting request to get document symbols");
 
@@ -664,10 +555,18 @@ pub fn get_documents_symbols(
                         symbols.map(|it| match it {
                             DocumentSymbolResponse::Flat(s) => {
                                 let stream = stream::iter(s).map(move |symbol| {
-                                    let code = get_code_from_document(
-                                        document_uri.clone(),
-                                        Some(symbol.location.range),
-                                    );
+                                    let code = if need_code_samples {
+                                        get_code_from_document(
+                                            document_uri.clone(),
+                                            Some(symbol.location.range),
+                                        )
+                                    } else {
+                                        None
+                                    };
+                                    let name_position = code.as_ref().and_then(|code| {
+                                        get_name_position(&symbol.name, code, &symbol.location)
+                                    });
+
                                     SymbolInfo {
                                         name: symbol.name,
                                         kind: format!("{:?}", symbol.kind),
@@ -675,6 +574,7 @@ pub fn get_documents_symbols(
                                         container_name: symbol.container_name,
                                         code,
                                         hover: None,
+                                        name_position,
                                     }
                                 });
 
@@ -682,17 +582,27 @@ pub fn get_documents_symbols(
                             }
                             DocumentSymbolResponse::Nested(s) => {
                                 let stream = stream::iter(s).map(move |symbol| {
-                                    let code = get_code_from_document(
-                                        document_uri.clone(),
-                                        Some(symbol.range),
-                                    );
+                                    let code = if need_code_samples {
+                                        get_code_from_document(
+                                            document_uri.clone(),
+                                            Some(symbol.range),
+                                        )
+                                    } else {
+                                        None
+                                    };
+                                    let location =
+                                        Location::new(document_uri.clone(), symbol.range);
+                                    let name_position = code.as_ref().and_then(|code| {
+                                        get_name_position(&symbol.name, code, &location)
+                                    });
                                     SymbolInfo {
                                         name: symbol.name,
                                         kind: format!("{:?}", symbol.kind),
-                                        location: Location::new(document_uri.clone(), symbol.range),
+                                        location,
                                         container_name: None,
                                         code,
                                         hover: None,
+                                        name_position,
                                     }
                                 });
                                 Either::Right(stream)
@@ -713,26 +623,27 @@ pub fn get_documents_symbols(
         .boxed()
 }
 
-async fn get_hover(lsp_server: &GuardedLspServer, symbol: &SymbolInfo) -> Option<Hover> {
-    if let Some(code) = &symbol.code {
-        if let Ok(re) = Regex::new(format!("(?m){}", symbol.name).as_str()) {
-            if let Some(m) = re.find(code) {
-                trace!(
-                    "Match found for: {} in {} from {} to {}",
-                    symbol.name,
-                    code,
-                    m.start(),
-                    m.end()
-                );
-                //end because it is precisely than start, rust-analyzer some time return wrong start position
-                //for name of symbol (as example `fn main` instead of `main` as function name), so when
-                //we try to find them in code, we need to use end
-                //local_line is 1 based index
-                //col is 1 based index
-                let (local_line, col) = line_column(code, m.end());
-                let line = symbol.location.range.start.line + local_line - 1;
-                info!(
-                    r#" Symbol positions:
+fn get_name_position(name: &str, code: &str, location: &Location) -> Option<Position> {
+    if let Ok(re) = Regex::new(format!("(?m){}", name).as_str()) {
+        if let Some(m) = re.find(code) {
+            trace!(
+                "Match found for: {} in {} from {} to {}",
+                name,
+                code,
+                m.start(),
+                m.end()
+            );
+            //end because it is precisely than start, rust-analyzer some time return wrong start position
+            //for name of symbol (as example `fn main` instead of `main` as function name), so when
+            //we try to find them in code, we need to use end
+            //local_line is 1 based index
+            //col is 1 based index
+            let (local_line, col) = line_column(code, m.end());
+            let line = location.range.start.line + local_line - 1;
+            info!(
+                r#" 
+                    Name: {}
+                    Symbol positions:
                         Line in file: {}
                         Line in code fragment (1 based): {}
                         Position in code fragment (1 based): {}
@@ -740,52 +651,126 @@ async fn get_hover(lsp_server: &GuardedLspServer, symbol: &SymbolInfo) -> Option
                         Symbol code start position: {}
                         Code fragment start position: {}
                         Code fragment end position: {}"#,
-                    line,
-                    local_line,
-                    col + 1,
-                    symbol.location.range.start.line,
-                    symbol.location.range.start.character,
-                    m.start(),
-                    m.end()
-                );
-                let hover = lsp_server
-                    .send_hover_request(symbol.location.uri.clone(), Position::new(line, col - 1))
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(hover) = hover {
-                    info!("Hover: {:?}", hover);
-                    return Some(hover);
-                } else {
-                    trace!("No hover found for: {:?}", symbol);
-                }
-            } else {
-                trace!("No match found for: {} in {}", symbol.name, code);
-            }
+                name,
+                line,
+                local_line,
+                col + 1,
+                location.range.start.line,
+                location.range.start.character,
+                m.start(),
+                m.end()
+            );
+            Some(Position::new(line, col - 1))
         } else {
-            trace!("Regex error for: {}", symbol.name);
+            trace!("No match found for: {} in {}", name, code);
+            None
         }
     } else {
-        trace!("No code found for: {:?}", symbol);
+        trace!("Regex error for: {}", name);
+        None
+    }
+}
+
+async fn get_hover(lsp_server: &GuardedLspServer, symbol: &SymbolInfo) -> Option<Hover> {
+    if let Some(position) = symbol.name_position {
+        let hover = lsp_server
+            .send_hover_request(symbol.location.uri.clone(), position)
+            .await
+            .ok()
+            .flatten();
+        if let Some(hover) = hover {
+            info!("Hover: {:?}", hover);
+            return Some(hover);
+        } else {
+            trace!("No hover found for: {:?}", symbol);
+        }
     }
     None
 }
 
-pub fn get_workspace_symbols(
+pub async fn get_workspace_symbols(
     guarded_lsp_server: &GuardedLspServer,
     names: Vec<String>,
 ) -> impl Stream<Item = WorkspaceSymbolResponse> + Send {
     info!("Starting request to get workspace symbols");
 
-    stream::iter(names)
-        .map(|q| guarded_lsp_server.send_workspace_symbol_request(q))
-        .filter_map(|it| async {
-            it.await
-                .inspect_err(|err| {
-                    error!("Error getting workspace symbols: {}", err);
-                })
-                .ok()
-                .flatten()
+    if names.is_empty() {
+        if let Ok(response) = guarded_lsp_server
+            .send_workspace_symbol_request("".to_string())
+            .await
+        {
+            match response {
+                Some(response) => stream::once(async { response }).boxed(),
+                None => stream::empty().boxed(),
+            }
+        } else {
+            stream::empty().boxed()
+        }
+    } else {
+        stream::iter(names)
+            .map(|q| guarded_lsp_server.send_workspace_symbol_request(q))
+            .filter_map(|it| async {
+                it.await
+                    .inspect_err(|err| {
+                        error!("Error getting workspace symbols: {}", err);
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .boxed()
+    }
+}
+
+fn path_distance(a: &Path, b: &Path) -> usize {
+    let a: Vec<_> = a.components().collect();
+    let b: Vec<_> = b.components().collect();
+
+    let common_len = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    (a.len() - common_len) + (b.len() - common_len)
+}
+
+//TODO: no graphs for POC
+pub fn find_max_distance_paths(candidates: &[PathBuf], usages: &[PathBuf]) -> Vec<PathBuf> {
+    candidates
+        .iter()
+        .max_set_by_key(|candidate| {
+            usages
+                .iter()
+                .map(|usage| path_distance(candidate.as_path(), usage.as_path()))
+                .sum::<usize>()
         })
-        .boxed()
+        .iter()
+        .map(|it| (*it).clone())
+        .collect::<Vec<_>>()
+}
+
+//TODO: no graphs for POC
+pub fn find_min_distance_paths(candidates: &[PathBuf], usages: &[PathBuf]) -> Vec<PathBuf> {
+    candidates
+        .iter()
+        .min_set_by_key(|candidate| {
+            usages
+                .iter()
+                .map(|usage| path_distance(candidate.as_path(), usage.as_path()))
+                .sum::<usize>()
+        })
+        .iter()
+        .map(|it| (*it).clone())
+        .collect::<Vec<_>>()
+}
+
+pub fn most_common_parent(paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut counts: HashMap<PathBuf, usize> = HashMap::new();
+
+    for path in paths {
+        if let Some(parent) = path.parent() {
+            let parent_buf = parent.to_path_buf();
+            *counts.entry(parent_buf).or_insert(0) += 1;
+        }
+    }
+
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(path, _)| path)
 }

@@ -38,7 +38,7 @@ pub struct ChunkerSubsystem {
 
 impl ChunkerSubsystem {
     async fn process_file(&self, path: &Path) -> Result<()> {
-        info!("File found for chunking: {}", path.display());
+        trace!("File found for chunking: {}", path.display());
         let file = File::open(path).await.into_diagnostic()?;
         trace!("File opened for chunking: {}", path.display());
         let mut reader = BufReader::new(file).lines();
@@ -59,7 +59,7 @@ impl ChunkerSubsystem {
                     text_chunk = text_chunk.next_chunk();
                 }
             } else {
-                info!(
+                trace!(
                     "File reader finished, sending last chunk to indexer: {}",
                     text_chunk.id
                 );
@@ -101,10 +101,10 @@ impl IntoSubsystem<miette::Report> for ChunkerSubsystem {
         {
             //TODO: For POC purposes it always will be fully rechunked after each file modified, but need to rechunk only changed chunks
             if event.kind.is_remove() {
-                info!("File/folder removed: {:?}", event);
+                trace!("File/folder removed: {:?}", event);
                 delete_by_path(&self.table, event.path.as_ref()).await?;
             } else if event.kind.is_create() || event.kind.is_modify() {
-                info!("File/folder created/modified: {:?}", event);
+                trace!("File/folder created/modified: {:?}", event);
                 delete_by_path(&self.table, event.path.as_ref()).await?;
                 if event.path.is_file() {
                     self.process_file(&event.path).await?;

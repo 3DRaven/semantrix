@@ -7,27 +7,37 @@ log_dir: "./logs" # path to the logs directory, will be used to store the logs
 rules: "./resources/templates/rules.yml" # path to the rules file, will be used to store the rules
 templates: # used jinja 2 templates with https://docs.rs/tera/1.20.0/tera/
   templates_path: "./resources/templates/**/*" # path in glob formatto the templates directory, will be used to store the templates
-  prompt: "prompt.md" # name of the template to use for the prompt
+  prompts:
+    searcher: "searcher_prompt.md" # name of the template to use for the prompt
+    placer: "placer_prompt.md" # name of the template to use for the prompt
   description:
     server: "description/server.md" # name of the template to use for the MCP server description
     fuzzy_query: "description/fuzzy_query.md" # name of the template to use for the fuzzy query description
     semantic_query: "description/semantic_query.md" # name of the template to use for the semantic query description
+placer:
+  prefetch_symbol_kinds:
+    - "Module" # base empty query for workspace symbols list for rust-analyzer it is just modules
+  final_symbol_kinds:
+    - "Class"
+    - "Enum"
+    - "Struct"
+  use_max_distance: true
 search:
   fuzzy:
     lsp_server: "rust-analyzer" # name of the LSP server to use as stdio server runed by mcp-lsp-bridge
     server_args: # arguments to pass to the LSP server (rust-analyzer in this case) as command line arguments
       - --log-file
       - rust-analyzer.log
-    workspace_uri: "file:///home/i3draven/fun/Rust/semantrix/src" # uri of the workspace, will be sent to the LSP server as workspaceFolders to scan for symbols
+    workspace_uri: "file:///home/i3draven/fun/Rust/degu/src" # uri of the workspace, will be sent to the LSP server as workspaceFolders to scan for symbols
     parallelizm: 1 # how many requests can be sent to the LSP server at the same time, attention rust-analyzer can't handle more than 1 request at a time
     # options for the LSP server, see https://rust-analyzer.github.io/book/configuration.html
     # they will send to the LSP server as initialization options json (converted to json Value), see https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize
     server_options: # options for rust-analyzer, for other LSP servers you must use different options
-      lru:
-        capacity: 44
-      memoryLimit: 512
-      cargo:
-        loadOutDirsFromCheck: false
+      # lru:
+      # capacity: 44
+      # memoryLimit: 512
+      # cargo:
+      # loadOutDirsFromCheck: false
       workspace:
         symbol:
           search:
@@ -81,7 +91,7 @@ search:
     # "clip-vit-b-32-text" => EmbeddingModel::ClipVitB32,
     # "jina-embeddings-v2-base-code" => EmbeddingModel::JinaEmbeddingsV2BaseCode,
     model: "all-mini-lm-l6-v2-q" # model to use for the embeddings
-    lancedb_store: "./resources/lancedb-store" # path to the lancedb store, will be used to store the embeddings
+    lancedb_store: "./resources/lancedb-store-semantrix" # path to the lancedb store, will be used to store the embeddings
     chunk_size: 5 # size of the chunk of code to semantically index
     overlap_size: 2 # overlap of the chunks
     # pattern to match the files to index as example: **/*.{rs,kt,c}

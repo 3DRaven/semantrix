@@ -23,8 +23,11 @@ use lancedb::{
 };
 use miette::{IntoDiagnostic, Result};
 use once_cell::sync::Lazy;
+use regex::Regex;
 use rig_lancedb::{LanceDbVectorIndex, SearchParams};
 use serde::Deserialize;
+use serde::Deserializer;
+use serde::de::Error;
 use serde_json::Value;
 use std::backtrace::Backtrace;
 use std::panic;
@@ -95,7 +98,7 @@ pub struct SemanticConfig {
 }
 #[derive(Clone, Debug, Deserialize)]
 
-pub struct Search {
+pub struct SearchConfig {
     pub semantic: SemanticConfig,
     pub fuzzy: FuzzyConfig,
 }
@@ -123,21 +126,50 @@ pub struct McpConfig {
     pub channel_size: usize,
     pub debounce_sec: u64,
     pub response: ResponseType,
-    pub search: Search,
-    pub templates: Templates,
+    pub search: SearchConfig,
+    pub templates: TemplatesConfig,
+    pub placer: PlacerConfig,
     pub log_dir: PathBuf,
     pub rules: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Templates {
-    pub templates_path: String,
-    pub prompt: String,
-    pub description: Description,
+pub struct PlacerConfig {
+    #[serde(deserialize_with = "deserialize_regex_vec")]
+    pub prefetch_symbol_kinds: Vec<Regex>,
+    #[serde(deserialize_with = "deserialize_regex_vec")]
+    pub final_symbol_kinds: Vec<Regex>,
+    /// If true, use max distance to find the best place to place the symbol
+    /// If false, use min distance to find the best place to place the symbol
+    pub use_max_distance: bool,
+}
+
+pub fn deserialize_regex_vec<'de, D>(deserializer: D) -> Result<Vec<Regex>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw_patterns: Vec<String> = Vec::deserialize(deserializer)?;
+    raw_patterns
+        .into_iter()
+        .map(|s| Regex::new(&s).map_err(D::Error::custom))
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Description {
+pub struct TemplatesConfig {
+    pub templates_path: String,
+    pub prompts: PromptTemplates,
+    pub description: DescriptionConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PromptTemplates {
+    pub searcher: String,
+    pub placer: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DescriptionConfig {
     pub server: String,
     pub fuzzy_query: String,
     pub semantic_query: String,

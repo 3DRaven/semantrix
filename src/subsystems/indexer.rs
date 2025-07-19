@@ -52,13 +52,13 @@ impl IntoSubsystem<miette::Report> for IndexerSubsystem {
                 trace!("Chunk received: {:?}", chunk.id);
                 batch.push(chunk.clone());
             } else {
-                info!("Last chunk marker received");
+                trace!("Last chunk marker received");
             }
             trace!("Batch size before batching: {}", batch.len());
             if batch.len() == CONFIG.search.semantic.batch_size
                 || (chunk.is_none() && !batch.is_empty())
             {
-                info!("Batch size reached, deleting old records");
+                trace!("Batch size reached, deleting old records");
                 let ids = batch
                     .iter()
                     .format_with(",", |chunk, f| {

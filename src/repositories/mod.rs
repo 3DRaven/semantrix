@@ -4,7 +4,7 @@ use lancedb::{
 };
 use miette::{IntoDiagnostic, Result};
 use std::path::Path;
-use tracing::info;
+use tracing::{info, trace};
 
 use crate::DEFAULT_CHUNKS_PATH_FIELD;
 
@@ -29,7 +29,7 @@ pub async fn delete_by_path(table: &Table, path: &Path) -> Result<()> {
             .into_diagnostic()?;
         optimize_index(table).await?;
     } else {
-        info!("Deleting chunk for file: {}", path.display());
+        trace!("Deleting chunk for file: {}", path.display());
         table
             .delete(
                 format!(
