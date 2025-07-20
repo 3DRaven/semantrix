@@ -117,7 +117,7 @@ impl McpService {
         let modules_symbols = get_fuzzy_symbols(
             &lsp_server,
             vec![],
-            Some(CONFIG.placer.prefetch_symbol_kinds.clone()),
+            CONFIG.placer.prefetch_symbol_kinds.clone(),
             false,
         )
         .await
@@ -131,14 +131,22 @@ impl McpService {
 
         debug!("Found modules symbols: {:?}", modules_symbols);
 
-        let symbols = get_documents_symbols(&lsp_server, modules_symbols, true)
-            .collect::<Vec<_>>()
-            .await;
+        let symbols = get_documents_symbols(
+            &lsp_server,
+            modules_symbols,
+            CONFIG.placer.final_symbol_kinds.clone(),
+        )
+        .await;
 
         debug!("Found symbols: {:?}", symbols);
 
         let places: Vec<SymbolPlaceTo> = get_symbols_references(&lsp_server, symbols.clone())
             .filter_map(|it| async move {
+                if it.references.is_empty() {
+                    debug!("No references found for symbol: {:?}", it.symbol_info);
+                    return None;
+                }
+
                 let candidates = it
                     .references
                     .iter()
@@ -301,7 +309,7 @@ impl McpService {
         info!("Starting to get symbols");
 
         let (fuzzy_symbols, semantic_symbols) = tokio::try_join!(
-            get_fuzzy_symbols(&lsp_server, name_patterns, None, true),
+            get_fuzzy_symbols(&lsp_server, name_patterns, vec![], true),
             get_semantic_symbols(&lsp_server, semantic_queries, self.vector_store.clone(),),
         )
         .inspect_err(|e| {

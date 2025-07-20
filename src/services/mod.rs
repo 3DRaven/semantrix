@@ -1,5 +1,4 @@
 pub mod mcp;
-use line_column::line_column;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::{
@@ -12,7 +11,7 @@ use futures::{Stream, StreamExt, TryStreamExt, future::Either, stream};
 use itertools::Itertools;
 use lsp_types::{
     DocumentSymbolResponse, Hover, HoverContents, Location, MarkedString, OneOf, Position, Range,
-    WorkspaceSymbolResponse,
+    SymbolKind, WorkspaceSymbolResponse,
 };
 use miette::{IntoDiagnostic, Result};
 use regex::{Regex, RegexSet};
@@ -22,6 +21,8 @@ use rig_lancedb::LanceDbVectorIndex;
 use rmcp::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use tera::Tera;
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, trace};
 use url::Url;
 use wax::{Glob, Pattern};
@@ -203,7 +204,7 @@ pub struct DocumentSymbols {
 async fn get_fuzzy_symbols(
     lsp_server: &GuardedLspServer,
     possible_names: Vec<String>,
-    kinds: Option<Vec<Regex>>,
+    kinds: Vec<Regex>,
     need_code_samples: bool,
 ) -> Result<Vec<SymbolInfo>> {
     info!("Getting fuzzy symbols for: {:?}", possible_names);
@@ -212,86 +213,51 @@ async fn get_fuzzy_symbols(
         .await
         .flat_map(|response| match response {
             WorkspaceSymbolResponse::Flat(s) => {
-                let stream = stream::iter(s).map(|symbol| {
-                    let location = symbol.location.clone();
-                    let code = if need_code_samples {
-                        get_code_from_document(location.uri, Some(location.range))
-                    } else {
-                        None
-                    };
-                    let name_position = code
-                        .as_ref()
-                        .and_then(|code| get_name_position(&symbol.name, code, &symbol.location));
-                    SymbolInfo {
+                let kinds = kinds.clone();
+                let stream = stream::iter(s)
+                    .filter(move |symbol| {
+                        let kinds = kinds.clone();
+                        filter_symbols_kind(symbol.kind, kinds)
+                    })
+                    .map(|symbol| SymbolInfo {
                         name: symbol.name,
                         kind: format!("{:?}", symbol.kind),
                         location: symbol.location,
                         container_name: symbol.container_name,
-                        code,
+                        code: None,
                         hover: None,
-                        name_position,
-                    }
-                });
+                        name_position: None,
+                    });
 
                 Either::Left(stream)
             }
             WorkspaceSymbolResponse::Nested(s) => {
-                let stream = stream::iter(s).map(|symbol| {
-                    let code = match symbol.location.clone() {
-                        OneOf::Left(location) => {
-                            if need_code_samples {
-                                get_code_from_document(location.uri, Some(location.range))
-                            } else {
-                                None
-                            }
+                let kinds = kinds.clone();
+                let stream = stream::iter(s)
+                    .filter(move |symbol| {
+                        let kinds = kinds.clone();
+                        filter_symbols_kind(symbol.kind, kinds)
+                    })
+                    .map(|symbol| {
+                        let location = match symbol.location {
+                            OneOf::Left(location) => location,
+                            OneOf::Right(location) => Location::new(
+                                location.uri,
+                                Range::new(Position::new(0, 0), Position::new(0, 0)),
+                            ),
+                        };
+
+                        SymbolInfo {
+                            name: symbol.name,
+                            kind: format!("{:?}", symbol.kind),
+                            location,
+                            container_name: symbol.container_name,
+                            code: None,
+                            hover: None,
+                            name_position: None,
                         }
-                        OneOf::Right(location) => {
-                            if need_code_samples {
-                                get_code_from_document(location.uri, None)
-                            } else {
-                                None
-                            }
-                        }
-                    };
-
-                    let location = match symbol.location {
-                        OneOf::Left(location) => location,
-                        OneOf::Right(location) => Location::new(
-                            location.uri,
-                            Range::new(Position::new(0, 0), Position::new(0, 0)),
-                        ),
-                    };
-
-                    let name_position = code
-                        .as_ref()
-                        .and_then(|code| get_name_position(&symbol.name, code, &location));
-
-                    SymbolInfo {
-                        name: symbol.name,
-                        kind: format!("{:?}", symbol.kind),
-                        location,
-                        container_name: symbol.container_name,
-                        code,
-                        hover: None,
-                        name_position,
-                    }
-                });
+                    });
                 Either::Right(stream)
-            }
-        })
-        .filter_map(|symbol| async {
-            if let Some(kinds) = &kinds {
-                if kinds
-                    .iter()
-                    .any(|kind| kind.is_match(&format!("{:?}", symbol.kind)))
-                {
-                    Some(symbol)
-                } else {
-                    debug!("Not matched kind: {:?}", symbol.kind);
-                    None
-                }
-            } else {
-                Some(symbol)
             }
         })
         .then(|mut it| async {
@@ -306,7 +272,15 @@ async fn get_fuzzy_symbols(
         .collect::<Vec<_>>()
         .await;
 
+    let symbols = update_code_and_name_position_from_document(symbols).await;
+
     Ok(symbols)
+}
+
+async fn filter_symbols_kind(symbol: SymbolKind, kinds: Vec<Regex>) -> bool {
+    kinds
+        .iter()
+        .any(|kind| kind.is_match(&format!("{:?}", symbol)))
 }
 
 async fn get_semantic_symbols(
@@ -366,9 +340,7 @@ async fn get_semantic_symbols(
 
     info!("Paths: {:?}", paths);
 
-    let documents = get_documents_symbols(lsp_server, paths, true)
-        .collect::<Vec<_>>()
-        .await;
+    let documents = get_documents_symbols(lsp_server, paths, vec![]).await;
 
     trace!("Documents: {:?}", documents);
 
@@ -449,23 +421,70 @@ async fn get_semantic_symbols(
     Ok(symbols)
 }
 
-fn get_code_from_document(document_uri: Url, location: Option<Range>) -> Option<String> {
-    let path = document_uri.to_file_path().ok();
-    if let Some(path) = path {
-        let text = std::fs::read_to_string(path).ok();
-        if let Some(text) = text {
-            let code = match location {
-                Some(range) => text
-                    .lines()
-                    .skip(range.start.line as usize)
-                    .take(range.end.line as usize - range.start.line as usize + 1)
-                    .join("\n"),
-                None => text,
-            };
-            return Some(code);
+async fn update_code_and_name_position_from_document(symbols: Vec<SymbolInfo>) -> Vec<SymbolInfo> {
+    let groups = symbols
+        .into_iter()
+        .into_group_map_by(|sym| sym.location.uri.clone());
+
+    let mut updated_symbols: Vec<SymbolInfo> = Vec::new();
+
+    for (url, group) in groups {
+        let path = url.to_file_path();
+        if let Ok(path) = path {
+            let file = File::open(path).await;
+            if let Ok(file) = file {
+                let mut lines = BufReader::new(file).lines();
+                let mut index = 0;
+                for mut symbol in group
+                    .into_iter()
+                    .sorted_by_key(|s| s.location.range.start.line)
+                {
+                    let regex = Regex::new(&regex::escape(&symbol.name));
+                    if let Ok(regex) = regex {
+                        let start_line = symbol.location.range.start.line;
+                        let end_line = symbol.location.range.end.line;
+                        let mut code = Vec::new();
+
+                        trace!(
+                            "Getting code and name position from document: {:?}, symbol: {:?}",
+                            symbol.location.uri, symbol
+                        );
+
+                        while let Ok(line) = lines.next_line().await {
+                            if index >= start_line && index <= end_line {
+                                if let Some(line) = line {
+                                    if symbol.name_position.is_none() {
+                                        if let Some(m) = regex.find(&line) {
+                                            let column = m.end() - 1;
+                                            symbol.name_position =
+                                                Some(Position::new(index, column as u32));
+                                        }
+                                    }
+                                    code.push(line);
+                                }
+                            }
+                            index += 1;
+                            if index > end_line {
+                                break;
+                            }
+                        }
+                        symbol.code = Some(code.join("\n"));
+
+                        trace!("Updated symbol: {:?}", symbol);
+                        updated_symbols.push(symbol);
+                    } else {
+                        error!("Error creating regex for symbol: {:?}", symbol);
+                    }
+                }
+            } else {
+                updated_symbols.extend(group);
+            }
+        } else {
+            updated_symbols.extend(group);
         }
     }
-    None
+
+    updated_symbols
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -502,10 +521,6 @@ pub fn get_symbols_references(
         .map(move |symbol_info| {
             let guarded_lsp_server = lsp_server.clone();
             async move {
-                info!(
-                    "Sending request to get symbols references for: {:?}",
-                    symbol_info
-                );
                 guarded_lsp_server
                     .send_references_request(
                         symbol_info.location.uri.clone(),
@@ -518,6 +533,12 @@ pub fn get_symbols_references(
                         it.map(|it| SymbolReferences {
                             symbol_info: symbol_info.clone(),
                             references: it,
+                        })
+                        .or_else(|| {
+                            Some(SymbolReferences {
+                                symbol_info: symbol_info.clone(),
+                                references: vec![],
+                            })
                         })
                     })
             }
@@ -533,16 +554,17 @@ pub fn get_symbols_references(
         .boxed()
 }
 
-pub fn get_documents_symbols(
+pub async fn get_documents_symbols(
     lsp_server: &GuardedLspServer,
     documents_uris: HashSet<Url>,
-    need_code_samples: bool,
-) -> impl Stream<Item = SymbolInfo> + Send {
+    kinds: Vec<Regex>,
+) -> Vec<SymbolInfo> {
     info!("Starting request to get document symbols");
 
-    stream::iter(documents_uris)
+    let symbols: Vec<SymbolInfo> = stream::iter(documents_uris)
         .map(move |document_uri| {
             let guarded_lsp_server = lsp_server.clone();
+            let kinds = kinds.clone();
             async move {
                 info!(
                     "Sending request to get document symbols for: {}",
@@ -554,57 +576,42 @@ pub fn get_documents_symbols(
                     .map(|symbols| {
                         symbols.map(|it| match it {
                             DocumentSymbolResponse::Flat(s) => {
-                                let stream = stream::iter(s).map(move |symbol| {
-                                    let code = if need_code_samples {
-                                        get_code_from_document(
-                                            document_uri.clone(),
-                                            Some(symbol.location.range),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    let name_position = code.as_ref().and_then(|code| {
-                                        get_name_position(&symbol.name, code, &symbol.location)
-                                    });
-
-                                    SymbolInfo {
+                                let stream = stream::iter(s)
+                                    .filter(move |symbol| {
+                                        let kinds = kinds.clone();
+                                        filter_symbols_kind(symbol.kind, kinds)
+                                    })
+                                    .map(move |symbol| SymbolInfo {
                                         name: symbol.name,
                                         kind: format!("{:?}", symbol.kind),
                                         location: symbol.location,
                                         container_name: symbol.container_name,
-                                        code,
+                                        code: None,
                                         hover: None,
-                                        name_position,
-                                    }
-                                });
+                                        name_position: None,
+                                    });
 
                                 Either::Left(stream)
                             }
                             DocumentSymbolResponse::Nested(s) => {
-                                let stream = stream::iter(s).map(move |symbol| {
-                                    let code = if need_code_samples {
-                                        get_code_from_document(
-                                            document_uri.clone(),
-                                            Some(symbol.range),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    let location =
-                                        Location::new(document_uri.clone(), symbol.range);
-                                    let name_position = code.as_ref().and_then(|code| {
-                                        get_name_position(&symbol.name, code, &location)
+                                let stream = stream::iter(s)
+                                    .filter(move |symbol| {
+                                        let kinds = kinds.clone();
+                                        filter_symbols_kind(symbol.kind, kinds)
+                                    })
+                                    .map(move |symbol| {
+                                        let location =
+                                            Location::new(document_uri.clone(), symbol.range);
+                                        SymbolInfo {
+                                            name: symbol.name,
+                                            kind: format!("{:?}", symbol.kind),
+                                            location,
+                                            container_name: None,
+                                            code: None,
+                                            hover: None,
+                                            name_position: Some(symbol.selection_range.end),
+                                        }
                                     });
-                                    SymbolInfo {
-                                        name: symbol.name,
-                                        kind: format!("{:?}", symbol.kind),
-                                        location,
-                                        container_name: None,
-                                        code,
-                                        hover: None,
-                                        name_position,
-                                    }
-                                });
                                 Either::Right(stream)
                             }
                         })
@@ -620,55 +627,10 @@ pub fn get_documents_symbols(
                 .flatten()
         })
         .flat_map(|it| it)
-        .boxed()
-}
+        .collect::<Vec<_>>()
+        .await;
 
-fn get_name_position(name: &str, code: &str, location: &Location) -> Option<Position> {
-    if let Ok(re) = Regex::new(format!("(?m){}", name).as_str()) {
-        if let Some(m) = re.find(code) {
-            trace!(
-                "Match found for: {} in {} from {} to {}",
-                name,
-                code,
-                m.start(),
-                m.end()
-            );
-            //end because it is precisely than start, rust-analyzer some time return wrong start position
-            //for name of symbol (as example `fn main` instead of `main` as function name), so when
-            //we try to find them in code, we need to use end
-            //local_line is 1 based index
-            //col is 1 based index
-            let (local_line, col) = line_column(code, m.end());
-            let line = location.range.start.line + local_line - 1;
-            info!(
-                r#" 
-                    Name: {}
-                    Symbol positions:
-                        Line in file: {}
-                        Line in code fragment (1 based): {}
-                        Position in code fragment (1 based): {}
-                        Symbol code start line: {}
-                        Symbol code start position: {}
-                        Code fragment start position: {}
-                        Code fragment end position: {}"#,
-                name,
-                line,
-                local_line,
-                col + 1,
-                location.range.start.line,
-                location.range.start.character,
-                m.start(),
-                m.end()
-            );
-            Some(Position::new(line, col - 1))
-        } else {
-            trace!("No match found for: {} in {}", name, code);
-            None
-        }
-    } else {
-        trace!("Regex error for: {}", name);
-        None
-    }
+    update_code_and_name_position_from_document(symbols).await
 }
 
 async fn get_hover(lsp_server: &GuardedLspServer, symbol: &SymbolInfo) -> Option<Hover> {
