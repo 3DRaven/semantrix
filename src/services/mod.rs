@@ -13,7 +13,7 @@ use lsp_types::{
     DocumentSymbolResponse, Hover, HoverContents, Location, MarkedString, OneOf, Position, Range,
     SymbolKind, WorkspaceSymbolResponse,
 };
-use miette::{IntoDiagnostic, Result};
+use miette::{IntoDiagnostic, Result, miette};
 use regex::{Regex, RegexSet};
 use rig::vector_store::VectorStoreIndexDyn;
 use rig_fastembed::EmbeddingModel;
@@ -735,4 +735,33 @@ pub fn most_common_parent(paths: &[PathBuf]) -> Option<PathBuf> {
         .into_iter()
         .max_by_key(|(_, count)| *count)
         .map(|(path, _)| path)
+}
+
+pub fn get_project_files() -> Result<Vec<PathBuf>> {
+    info!("Start path scanner");
+
+    let url = Url::parse(&CONFIG.search.fuzzy.workspace_uri).into_diagnostic()?;
+
+    if url.scheme() != "file" {
+        return Err(miette!("Not a file URL: {}", url));
+    }
+
+    let path = url
+        .to_file_path()
+        .map_err(|_| miette!("Invalid file URL: {}", url))?;
+
+    let positive = Glob::new(CONFIG.search.semantic.pattern.as_str()).into_diagnostic()?;
+
+    let mut files = Vec::new();
+    let walker = positive.walk(&path);
+
+    for entry in walker
+        .filter_map(|it| it.ok())
+        .filter(|it| it.file_type().is_file())
+    {
+        info!("File found: {:?}", entry.path());
+        files.push(entry.into_path());
+    }
+
+    Ok(files)
 }

@@ -1,12 +1,3 @@
-use std::{
-    collections::HashSet,
-    path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
-
 use futures::StreamExt;
 use miette::Result;
 use rig_fastembed::EmbeddingModel;
@@ -23,13 +14,22 @@ use schemars::{
     schema::{InstanceType, ObjectValidation, Schema, SchemaObject},
 };
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::sync::watch::{self};
 use tracing::{debug, error, info};
+use url::Url;
 
 use crate::services::{
     Ruleset, SymbolPlaceTo, find_max_distance_paths, find_min_distance_paths,
-    get_documents_symbols, get_fuzzy_symbols, get_semantic_symbols, get_symbols_references,
-    most_common_parent,
+    get_documents_symbols, get_fuzzy_symbols, get_project_files, get_semantic_symbols,
+    get_symbols_references, most_common_parent,
 };
 use crate::{CONFIG, NAME, ResponseType, TERA, VERSION, subsystems::lsp::GuardedLspServer};
 
@@ -114,20 +114,14 @@ impl McpService {
 
         info!("Starting to get symbols");
 
-        let modules_symbols = get_fuzzy_symbols(
-            &lsp_server,
-            vec![],
-            CONFIG.placer.prefetch_symbol_kinds.clone(),
-            false,
-        )
-        .await
-        .inspect_err(|e| {
-            error!("Error getting symbols: {}", e);
-        })
-        .map_err(|e| Error::internal_error(format!("Failed to get symbols: {}", e), None))?
-        .into_iter()
-        .map(|it| it.location.uri)
-        .collect::<HashSet<_>>();
+        let files = get_project_files().map_err(|e| {
+            Error::internal_error(format!("Failed to get project files: {}", e), None)
+        })?;
+
+        let modules_symbols = files
+            .into_iter()
+            .filter_map(|it| Url::from_file_path(it).ok())
+            .collect::<HashSet<_>>();
 
         debug!("Found modules symbols: {:?}", modules_symbols);
 
